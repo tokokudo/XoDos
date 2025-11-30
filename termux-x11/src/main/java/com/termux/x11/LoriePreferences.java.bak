@@ -1,15 +1,5 @@
 package com.termux.x11;
 
-// Add these imports instead
-import java.io.IOException;
-import java.lang.reflect.Method;
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-
-import androidx.appcompat.app.AlertDialog;
-
 import static android.Manifest.permission.POST_NOTIFICATIONS;
 import static android.Manifest.permission.WRITE_SECURE_SETTINGS;
 import static android.content.pm.PackageManager.PERMISSION_DENIED;
@@ -103,9 +93,6 @@ import java.util.regex.PatternSyntaxException;
 public class LoriePreferences extends AppCompatActivity implements PreferenceFragmentCompat.OnPreferenceStartFragmentCallback {
     static final String ACTION_PREFERENCES_CHANGED = "com.termux.x11.ACTION_PREFERENCES_CHANGED";
     public static Prefs prefs = null;
-    
-private static final String USR_PREFIX = "/data/data/com.termux/files/usr";
-
 
     public static int OPEN_FILE_REQUEST_CODE = 102;
     static final String SHOW_IME_WITH_HARD_KEYBOARD = "show_ime_with_hard_keyboard";
@@ -140,7 +127,6 @@ public boolean isActivityValid() {
     }
 
     protected interface TermuxActivityListener {
-
         void onX11PreferenceSwitchChange(boolean isOpen);
 
         void releaseSlider(boolean open);
@@ -296,77 +282,11 @@ public boolean isActivityValid() {
             termuxActivityListener.reInstallX11StartScript(this);
         }
     }
-    
-
-
-private void execShell(String cmd) {
-    try {
-        Process process = Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
-        
-        // Capture output and error streams
-        BufferedReader stdInput = new BufferedReader(new 
-            InputStreamReader(process.getInputStream()));
-        BufferedReader stdError = new BufferedReader(new 
-            InputStreamReader(process.getErrorStream()));
-        
-        String s;
-        StringBuilder output = new StringBuilder();
-        StringBuilder error = new StringBuilder();
-        
-        while ((s = stdInput.readLine()) != null) {
-            output.append(s).append("\n");
-        }
-        
-        while ((s = stdError.readLine()) != null) {
-            error.append(s).append("\n");
-        }
-        
-        process.waitFor();
-        
-        // Log the results
-        Log.d("ShellCommand", "Output: " + output.toString());
-      //  if (error.length() > 0) {
-          //  Log.e("ShellCommand", "Error: " + error.toString());
-         //   Toast.makeText(this, "Command error: " + error.toString(), 
-         //       Toast.LENGTH_LONG).show();
-     //   }
-        
-    } catch (IOException | InterruptedException e) {
-        e.printStackTrace();
-        
-    }
-}
-
-
-private void performRestartSequence() {
-    // First, try a simple command to see if execution works
-    execShell("echo ' stopping wine execution'");
-        
-   // Try each command separately
-    String[] commands = {
-        USR_PREFIX + "/glibc/bin/box64 " + USR_PREFIX + "/glibc/bin/wineserver -k",
-        USR_PREFIX + "/bin/box64 " + USR_PREFIX + "/opt/wine/bin/wineserver -k",
-        "pkill -f \"termux.x11\""  // Alternative to kill -9 $(pgrep -f)
-    };
-    
-    for (String cmd : commands) {
-        execShell(cmd);
-    }
-    Toast.makeText(this, "Wine processes stopped", Toast.LENGTH_SHORT).show();
-}
-
-
-
 
     public void stopDesktop() {
-
-                //    performRestartSequence();
-                            if (termuxActivityListener != null) {
+        if (termuxActivityListener != null) {
             termuxActivityListener.stopDesktop();
         }
-               //     Toast.makeText(this, "Stopping Wine desktop...", Toast.LENGTH_SHORT).show();
-    
-
     }
 
     public static class LoriePreferenceFragment extends PreferenceFragmentCompat implements OnPreferenceChangeListener {
@@ -622,47 +542,6 @@ private void performRestartSequence() {
                     Toast.makeText(ctx, "Copied to clipboard", Toast.LENGTH_SHORT).show();
                 }
             }
-            
-
-// In the onPreferenceTreeClick method, replace the wine_settings handler with this:
-if (p.getKey().contentEquals("wine_settings")) {
-    if (loriePreferences != null && loriePreferences.isActivityValid()) {
-        // Use reflection to call XoDosWizard
-        try {
-            Class<?> xoDosWizardClass = Class.forName("com.termux.app.XoDosWizard");
-            Object xoDosWizardInstance = xoDosWizardClass
-                .getDeclaredConstructor(Activity.class)
-                .newInstance(loriePreferences);
-            Method startMethod = xoDosWizardClass.getMethod("start");
-            startMethod.invoke(xoDosWizardInstance);
-        } catch (Exception e) {
-            e.printStackTrace();
-            Toast.makeText(loriePreferences, 
-                "Failed to open Wine settings: " + e.getMessage(), 
-                Toast.LENGTH_LONG).show();
-        }
-    }
-    return true;
-}
-
-
-            /*    // Add Wine Stop handler
-    if (p.getKey().contentEquals("wine_stop")) {
-        if (loriePreferences != null && loriePreferences.isActivityValid()) {
-            new AlertDialog.Builder(requireContext())
-                .setTitle("Stop Wine Desktop")
-                .setMessage("Are you sure you want to stop and exit Wine desktop?")
-                .setPositiveButton(android.R.string.ok, (dialog, which) -> {
-                    loriePreferences.performRestartSequence();
-                    Toast.makeText(loriePreferences, "Stopping Wine desktop...", Toast.LENGTH_SHORT).show();
-                })
-                .setNegativeButton(android.R.string.cancel, null)
-                .show();
-        }
-        return true;
-    }
-            */
-            
             if (p.getKey().contentEquals("open_keyboard")) {
                 handler.postDelayed(() -> {
                     if (loriePreferences != null) {
@@ -683,7 +562,7 @@ if (p.getKey().contentEquals("wine_settings")) {
                 TextView desc = view.findViewById(R.id.x11_server_bridge_config_description);
                 desc.setText(R.string.x11_server_bridge_config);
                 desc.setMovementMethod(LinkMovementMethod.getInstance());
-                if (getActivity() != null && !getActivity().isFinishing() && !getActivity().isDestroyed()) {
+                if (isActivityValid()) {
                 new android.app.AlertDialog.Builder(getActivity())
                     .setView(view)
                     .setTitle("XoDos X11 server installer")
@@ -750,7 +629,7 @@ if (p.getKey().contentEquals("wine_settings")) {
                 if (!((Boolean) newValue))
                     KeyInterceptor.shutdown(false);
                 if (requireContext().checkSelfPermission(WRITE_SECURE_SETTINGS) != PERMISSION_GRANTED) {
-                if (getActivity() != null && !getActivity().isFinishing() && !getActivity().isDestroyed()) {
+                if (isActivityValid()) {
                     new AlertDialog.Builder(requireContext())
                         .setTitle("Permission denied")
                         .setMessage("Android requires WRITE_SECURE_SETTINGS permission to start accessibility service automatically.\n" +
@@ -792,7 +671,7 @@ if (p.getKey().contentEquals("wine_settings")) {
                 desc.setLinksClickable(true);
                 desc.setText(R.string.extra_keys_config_desc);
                 desc.setMovementMethod(LinkMovementMethod.getInstance());
-                if (getActivity() != null && !getActivity().isFinishing() && !getActivity().isDestroyed()) {
+                if (isActivityValid()) {
                 new android.app.AlertDialog.Builder(getActivity())
                     .setView(view)
                     .setTitle("Extra keys config")

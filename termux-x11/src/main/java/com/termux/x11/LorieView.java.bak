@@ -1,13 +1,10 @@
 package com.termux.x11;
 
-
-
 ////////
 import android.view.MotionEvent;
 import android.view.InputDevice;
+import com.winlator.xenvironment.components.VortekRendererComponent;
 //import android.widget.Toast;
-
-
 
 import static android.view.InputDevice.KEYBOARD_TYPE_ALPHABETIC;
 import static android.view.KeyEvent.KEYCODE_BACK;
@@ -77,6 +74,7 @@ import java.util.regex.PatternSyntaxException;
 
 import dalvik.annotation.optimization.CriticalNative;
 import dalvik.annotation.optimization.FastNative;
+
 class InputConnectionWrapper implements InputConnection {
     private static final String TAG = "InputConnectionWrapper";
     private final InputConnection wrapped;
@@ -374,6 +372,29 @@ public class LorieView extends SurfaceView implements InputStub {
         int BGRA_8888 = 5; // Stands for HAL_PIXEL_FORMAT_BGRA_8888
     }
 
+
+///////////////
+private VortekRendererComponent vortekRenderer;
+// Add a member
+// add near the other methods
+
+public boolean isSurfaceReady() {
+    Surface s = getHolder().getSurface();
+    return s != null && s.isValid();
+}
+
+public Surface getSurfaceOrNull() {
+    Surface s = getHolder().getSurface();
+    return (s != null && s.isValid()) ? s : null;
+}
+
+
+public VortekRendererComponent getVortekRenderer() {
+    return vortekRenderer;
+}
+
+
+
     private ClipboardManager clipboard;
     private long lastClipboardTimestamp = System.currentTimeMillis();
     private static boolean clipboardSyncEnabled = false;
@@ -589,9 +610,25 @@ public class LorieView extends SurfaceView implements InputStub {
         }
     });
     private final SurfaceHolder.Callback mSurfaceCallback = new SurfaceHolder.Callback() {
+    
+    
+    
         @Override public void surfaceCreated(@NonNull SurfaceHolder holder) {
             holder.setFormat(PixelFormat.BGRA_8888);
+            
+       // vortekRenderer = new VortekRendererComponent(LorieView.this);
+    
+    // Set the surface dimensions
+    Rect r = holder.getSurfaceFrame();
+    if (vortekRenderer != null) {
+        vortekRenderer.setSurfaceDimensions(r.width(), r.height());
+    }
+
         }
+
+
+
+
 
         @Override public void surfaceChanged(@NonNull SurfaceHolder holder, int f, int width, int height) {
             LorieView.this.surfaceChanged(holder.getSurface());
@@ -605,8 +642,22 @@ public class LorieView extends SurfaceView implements InputStub {
             getDimensionsFromSettings();
             if (mCallback != null)
                 mCallback.changed(width, height, p.x, p.y);
+                
+              if (vortekRenderer != null) {
+        Surface surface = holder.getSurface();
+        if (surface != null && surface.isValid()) {
+            vortekRenderer.setSurface(surface);
+            vortekRenderer.setSurfaceDimensions(width, height);
+            // Notify about window size change
+            sendWindowChange(width, height, 60, "VORTEK");
         }
+    }
+}
 
+
+        
+        
+        
         @Override public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
             LorieView.this.surfaceChanged(null);
             if (mCallback != null)

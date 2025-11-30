@@ -1,5 +1,30 @@
 package com.termux.x11;
 
+import android.graphics.Rect;
+import android.graphics.PointF;
+import com.termux.x11.input.InputEventSender;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.IOException;
+import com.winlator.core.GPUHelper;
+//import com.winlator.xenvironment.components.VortekOptions;
+import java.util.Arrays;
+import com.winlator.xserver.extensions.PresentExtension;
+import android.graphics.Bitmap;
+import android.graphics.Bitmap.Config;
+import java.io.*;
+import java.net.*;
+import android.system.Os;
+import android.system.OsConstants;
+import android.util.Log;
+import android.net.LocalSocket;
+import android.net.LocalServerSocket;
+import android.net.LocalSocketAddress;
+
+import com.winlator.core.KeyValueSet;
+import com.winlator.xenvironment.components.UnixSocketConfig;
+import com.winlator.xenvironment.components.VortekRendererComponent;
+import android.widget.Toast;
 // new imports
 
 import com.termux.x11.R;
@@ -138,53 +163,189 @@ public class MainActivity extends LoriePreferences {
     //    private final SharedPreferences.OnSharedPreferenceChangeListener preferencesChangedListener = (__, key) -> onPreferencesChanged(key);
     private static boolean softKeyboardShown = false;
 
+private PresentExtension presentExtension;
+
+
+
+private Thread vortekThread;
+private volatile boolean vortekRunning = false;
+private volatile boolean vortekServerStarted = false;
+
+private static final String VORTEK_SOCKET_PATH = "/data/data/com.termux/files/usr/tmp/.vortek/V0";
+
+private com.winlator.xenvironment.components.VortekRendererComponent vortek;
+
+
+static {
+    try {
+        System.loadLibrary("winlator");
+        //System.loadLibrary("vortekrenderer1");
+        System.loadLibrary("vortekrenderer");
+
+    } catch (UnsatisfiedLinkError e) {
+        e.printStackTrace(); // won't show as Toast here
+
+    }
+}
+
+
+
+
+private void stopVortekServer() {
+    vortekRunning = false;
+    if (vortekThread != null) {
+        vortekThread.interrupt();
+        vortekThread = null;
+    }
+    if (vortek != null) {
+        vortek.destroy();
+        vortek = null;
+    }
+    
+    runOnUiThread(() -> Toast.makeText(this, "🚫 stopped", Toast.LENGTH_LONG).show());
+}
+
+        
+
+private void startVortekServerOnce() {
+    if (vortekServerStarted) return;
+    vortekServerStarted = true;
+
+    Log.i("VORTEK", "Starting Vortek server");
+    runOnUiThread(() -> Toast.makeText(this, "Starting Vortek", Toast.LENGTH_SHORT).show());
+
+    File socketFile = new File(VORTEK_SOCKET_PATH);
+    if (socketFile.exists()) socketFile.delete();
+    socketFile.getParentFile().mkdirs();
+
+    LorieView view = getLorieView();
+    if (view == null) {
+        Log.e("VORTEK", "LorieView is not available");
+        return;
+    }
+
+    // Attach VortekRendererComponent
+    vortek = new com.winlator.xenvironment.components.VortekRendererComponent(getLorieView());
+getLorieView().setVortekRendererComponent(vortek);
+    // If surface already valid, attach immediately
+    Surface surface = view.getSurfaceOrNull();
+    if (surface != null) {
+        vortek.setSurface(surface);
+        Log.i("VORTEK", "Surface attached to Vortek immediately");
+    } else {
+        Log.w("VORTEK", "Surface not ready at server start, will wait for surfaceChanged()");
+    }
+
+    vortekRunning = true;
+
+    vortekThread = new Thread(() -> {
+        try {
+            android.net.LocalSocket serverSocket = new android.net.LocalSocket();
+            android.net.LocalSocketAddress address =
+                    new android.net.LocalSocketAddress(VORTEK_SOCKET_PATH,
+                            android.net.LocalSocketAddress.Namespace.FILESYSTEM);
+            serverSocket.bind(address);
+            android.net.LocalServerSocket server =
+                    new android.net.LocalServerSocket(serverSocket.getFileDescriptor());
+
+            Log.i("VORTEK", "🌐 Vortek server started");
+
+            while (vortekRunning) {
+                android.net.LocalSocket client = server.accept();
+                int fd = getSocketFd(client.getFileDescriptor());
+                Log.i("VORTEK", "🔌 Wine client connected (fd=" + fd + ")");
+
+                InputStream in = client.getInputStream();
+                int request = in.read();   // expect 1 from Wine
+
+                if (request == 1) {
+                    Log.i("VORTEK", "📥 Vortek init request received");
+
+                    com.winlator.xenvironment.components.VortekRendererComponent.Options options =
+                            com.winlator.xenvironment.components.VortekRendererComponent.Options.defaultOptions();
+
+                    Surface currentSurface = view.getSurfaceOrNull();
+                    if (currentSurface != null) {
+                        vortek.setSurface(currentSurface);
+                        long ctx = vortek.createVkContext(fd, options);
+                        if (ctx == 0) {
+                            Log.e("VORTEK", "❌ Vulkan context creation failed");
+                            client.close();
+                            continue;
+                        }
+                        Log.i("VORTEK", "✅ Vulkan context created");
+
+                        // async monitor client disconnect
+                        new Thread(() -> {
+                            try { client.getInputStream().read(); } catch (Exception ignored) {}
+                            try { client.close(); } catch (Exception ignored) {}
+                            vortek.destroyVkContext(ctx);
+                            Log.i("VORTEK", "Client disconnected");
+                        }).start();
+
+                    } else {
+                        Log.w("VORTEK", "⚠️ Surface not ready, deferring VkContext init");
+                        // Save pending init into LorieView to retry later
+                        //view.pendingInitFd = fd;
+                       // view.pendingInitOpts = options;
+                    }
+
+                } else {
+                    Log.w("VORTEK", "Unknown Vortek request byte: " + request);
+                    client.close();
+                }
+            }
+
+            server.close();
+        } catch (Exception e) {
+            Log.e("VORTEK", "Server error", e);
+        }
+    }, "VortekServer");
+
+    vortekThread.setDaemon(true);
+    vortekThread.start();
+}
+
+private int getSocketFd(java.io.FileDescriptor fd) {
+    try {
+        java.lang.reflect.Field field = java.io.FileDescriptor.class.getDeclaredField("descriptor");
+        field.setAccessible(true);
+        return field.getInt(fd);
+    } catch (Exception e) {
+        Log.e("VORTEK", "❌ Failed to get socket FD", e);
+        return -1;
+    }
+}
+
+
+
 
  //////////////////////////////////////////////////////////////////
 private void checkConnectedControllers() {
     int[] deviceIds = InputDevice.getDeviceIds();
     for (int id : deviceIds) {
         InputDevice device = InputDevice.getDevice(id);
-        if ((device.getSources() & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
-            && !isIgnoredDevice(device)) {
-            
-            String msg = "Controller:🎮 " + device.getName() + " (ID:" + id + ")";
+        if ((device.getSources() & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD) {
+            String msg = "Controller:🎮" + device.getName() + " (ID:" + id + ")";
             Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
             Log.d("ControllerDebug", msg);
         }
     }
-}
-
-
- /// check fingerprint sensors that acts like gamepad
- private boolean isIgnoredDevice(InputDevice device) {
-    if (device == null) return true;
-
-    String name = device.getName().toLowerCase();
-
-    // Ignore fingerprint or virtual devices that masquerade as gamepads
-    return name.contains("uinput-fpc") ||
-           name.contains("fingerprint") ||
-           name.contains("fpc1020") ||   // common FPC models
-           name.contains("goodix")   ||  // Goodix sensors
-           device.isVirtual();          // Ignore system-generated virtual inputs
-}
+}   
     
-       
-             private boolean isGamepadConnected() {
+    private boolean isGamepadConnected() {
     int[] deviceIds = InputDevice.getDeviceIds();
     for (int id : deviceIds) {
         InputDevice device = InputDevice.getDevice(id);
-        if (device == null) continue;
-        if (isIgnoredDevice(device)) continue;
-
         if ((device.getSources() & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
             (device.getSources() & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK) {
-            return true;
+          //  runOnUiThread(() -> Toast.makeText(this, "Gamepad connected: ", Toast.LENGTH_SHORT).show());
+            return true; // A physical gamepad is connected
         }
     }
-    return false;
+    return false; // No gamepad found
 }
-    
+
 public boolean isWineRunning() {
     try {
         // Use pgrep for more reliable process detection
@@ -254,6 +415,8 @@ public boolean isWineRunning() {
 
     @Override
     @SuppressLint({"AppCompatMethod", "ObsoleteSdkInt", "ClickableViewAccessibility", "WrongConstant", "UnspecifiedRegisterReceiverFlag", "ResourceType", "MissingInflatedId"})
+    
+    
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
@@ -286,8 +449,14 @@ public boolean isWineRunning() {
         int touch_sensitivity = preferences.getInt("touch_sensitivity", 1);
         mInputHandler.setLongPressedDelay(touch_sensitivity);
 //        Log.d("MainActivity","touch_sensitivity:"+touch_sensitivity);
-        mLorieKeyListener = (v, k, e) -> {
+//////// start virtek server
+    if (!vortekServerStarted) {
+        startVortekServerOnce();
+    }
 
+/////////
+
+        mLorieKeyListener = (v, k, e) -> {
 ///////// fixing controller binding and support
 
 if (e.getDevice() == null) {
@@ -322,7 +491,7 @@ if (e.getDevice() == null) {
 
     
                 
-                if (!isIgnoredDevice(dev) && isGamepadConnected()) {
+                if (isGamepadConnected()) {
     InputDevice device = e.getDevice();
     
 //Toast.makeText(this,"Handled Key: " + KeyEvent.keyCodeToString(e.getKeyCode()),Toast.LENGTH_SHORT).show();
@@ -363,13 +532,10 @@ handledByInputHandler = mInputHandler.sendKeyEvent(e);
         };
         
        //////////////
-   // ================= Input Listeners =================
-//lorieParent.setOnTouchListener((v, e) -> mInputHandler.handleTouchEvent(lorieParent, lorieView, e));
-//lorieParent.setOnHoverListener((v, e) -> mInputHandler.handleTouchEvent(lorieParent, lorieView, e));
-//lorieParent.setOnGenericMotionListener((v, e) -> mInputHandler.handleTouchEvent(lorieParent, lorieView, e));
-lorieView.setOnCapturedPointerListener((v, e) -> mInputHandler.handleTouchEvent(lorieView, lorieView, e));
-//lorieView.setOnHoverListener((v, e) -> mInputHandler.handleTouchEvent(lorieView, lorieView, e));
-// ===================================================
+        /*
+           
+     *///////
+        
         
   ///////////      
         
@@ -378,7 +544,7 @@ lorieView.setOnCapturedPointerListener((v, e) -> mInputHandler.handleTouchEvent(
         lorieView.setOnHoverListener((v, e) -> mInputHandler.handleTouchEvent(lorieParent, lorieView, e));
         
     lorieView.setOnGenericMotionListener((v, e) -> {
-    if (!isIgnoredDevice(e.getDevice()) && isGamepadConnected() && (e.getSource() & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK) {
+    if (isGamepadConnected() && (e.getSource() & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK) {
         // Send to Wine if running
         if (isWineRunning()) {
             winHandler.onGenericMotionEvent(e);
@@ -440,6 +606,9 @@ lorieView.setOnCapturedPointerListener((v, e) -> mInputHandler.handleTouchEvent(
         initMouseAuxButtons();
         setupInputController();
 checkConnectedControllers(); 
+//  startVortekServer();
+
+
         if (SDK_INT >= VERSION_CODES.TIRAMISU
             && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PERMISSION_GRANTED
             && !shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
@@ -466,6 +635,7 @@ checkConnectedControllers();
     protected void onDestroy() {
         winHandler.stop();
         unregisterReceiver(receiver);
+        stopVortekServer();
         super.onDestroy();
     }
 

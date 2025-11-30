@@ -1,10 +1,13 @@
 package com.termux.x11;
 
+
+
 ////////
 import android.view.MotionEvent;
 import android.view.InputDevice;
-import com.winlator.xenvironment.components.VortekRendererComponent;
 //import android.widget.Toast;
+import com.winlator.xenvironment.components.VortekRendererComponent;
+
 
 import static android.view.InputDevice.KEYBOARD_TYPE_ALPHABETIC;
 import static android.view.KeyEvent.KEYCODE_BACK;
@@ -74,6 +77,7 @@ import java.util.regex.PatternSyntaxException;
 
 import dalvik.annotation.optimization.CriticalNative;
 import dalvik.annotation.optimization.FastNative;
+
 
 class InputConnectionWrapper implements InputConnection {
     private static final String TAG = "InputConnectionWrapper";
@@ -351,6 +355,17 @@ public class LorieView extends SurfaceView implements InputStub {
     public CursorLocker cursorLocker;
     public WinHandler winHandler;
 
+
+
+///////////////
+// Add a member
+public VortekRendererComponent vortekRenderer;
+
+// Called from MainActivity when you want to enable Vortek
+public void attachVortekRenderer() {
+    vortekRenderer = new VortekRendererComponent(this);
+}
+
     public void setWinHandler(WinHandler handler) {
         this.winHandler = handler;
     }
@@ -371,48 +386,6 @@ public class LorieView extends SurfaceView implements InputStub {
     interface PixelFormat {
         int BGRA_8888 = 5; // Stands for HAL_PIXEL_FORMAT_BGRA_8888
     }
-
-
-///////////////
-private VortekRendererComponent vortekRenderer;
-// Add a member
-// add near the other methods
-
-public boolean isSurfaceReady() {
-    Surface s = getHolder().getSurface();
-    return s != null && s.isValid();
-}
-
-public Surface getSurfaceOrNull() {
-    Surface s = getHolder().getSurface();
-    return (s != null && s.isValid()) ? s : null;
-}
-
-
-public VortekRendererComponent getVortekRenderer() {
-    return vortekRenderer;
-}
-
-public void setVortekRendererComponent(VortekRendererComponent r) {
-    this.vortekRenderer = r;
-
-    // If surface is already valid, attach it now
-    Surface s = getSurfaceOrNull();
-    if (s != null) {
-        vortekRenderer.setSurface(s);
-        Rect fr = getHolder().getSurfaceFrame();
-        vortekRenderer.setSurfaceDimensions(fr.width(), fr.height());
-        // Also tell X/driver about current window size
-        sendWindowChange(fr.width(), fr.height(), 60, "VORTEK");
-        Log.i("VORTEK", "Surface attached to Vortek via setter");
-    } else {
-        Log.w("VORTEK", "Surface not ready yet in setter; will attach on surfaceChanged()");
-    }
-}
-
-
-
-
 
     private ClipboardManager clipboard;
     private long lastClipboardTimestamp = System.currentTimeMillis();
@@ -628,66 +601,48 @@ public void setVortekRendererComponent(VortekRendererComponent r) {
             return requestCursorUpdates(cursorUpdateMode);
         }
     });
- 
- private final SurfaceHolder.Callback mSurfaceCallback = new SurfaceHolder.Callback() {
+    private final SurfaceHolder.Callback mSurfaceCallback = new SurfaceHolder.Callback() {
+        @Override public void surfaceCreated(@NonNull SurfaceHolder holder) {
+            holder.setFormat(PixelFormat.BGRA_8888);
+        }
 
-    @Override public void surfaceCreated(@NonNull SurfaceHolder holder) {
-        holder.setFormat(PixelFormat.BGRA_8888);
+        @Override public void surfaceChanged(@NonNull SurfaceHolder holder, int f, int width, int height) {
+            LorieView.this.surfaceChanged(holder.getSurface());
+            width = getMeasuredWidth();
+            height = getMeasuredHeight();
 
-        // If MainActivity already provided a VortekRendererComponent,
-        // attach surface + dimensions right away.
-        if (vortekRenderer != null) {
-            Surface s = holder.getSurface();
-            if (s != null && s.isValid()) {
-                vortekRenderer.setSurface(s);
-                Rect fr = holder.getSurfaceFrame();
-                vortekRenderer.setSurfaceDimensions(fr.width(), fr.height());
-                sendWindowChange(fr.width(), fr.height(), 60, "VORTEK");
-                Log.i("VORTEK", "Surface attached to Vulkan (surfaceCreated)");
-            } else {
-                Log.w("VORTEK", "surfaceCreated: surface is null/invalid");
-            }
+            Log.d("SurfaceChangedListener", "Surface was changed: " + width + "x" + height);
+            if (mCallback == null)
+                return;
+
+            getDimensionsFromSettings();
+            if (mCallback != null)
+                mCallback.changed(width, height, p.x, p.y);
+                
+                if (vortekRenderer != null) {
+        Surface surface = holder.getSurface();
+        if (surface != null && surface.isValid()) {
+            vortekRenderer.setSurface(surface);
+           // VortekRendererComponent.Options opts = VortekRendererComponent.Options.defaultOptions();
+           // vortekRenderer.initContext(0, opts);
+
+            // tell Vortek the new window size
+            sendWindowChange(width, height, 60, "VORTEK");
         }
     }
-
-    @Override public void surfaceChanged(@NonNull SurfaceHolder holder, int f, int width, int height) {
-        // Keep existing flow
-        LorieView.this.surfaceChanged(holder.getSurface());
-
-        // Use the actual Surface frame size for accuracy
-        Rect fr = holder.getSurfaceFrame();
-        width  = fr.width();
-        height = fr.height();
-
-        Log.d("SurfaceChangedListener", "Surface was changed: " + width + "x" + height);
-        if (mCallback == null)
-            return;
-
-        getDimensionsFromSettings();
-        if (mCallback != null)
-            mCallback.changed(width, height, p.x, p.y);
-
-        // Attach to Vortek if available
-        if (vortekRenderer != null) {
-            Surface surface = holder.getSurface();
-            if (surface != null && surface.isValid()) {
-                vortekRenderer.setSurface(surface);
-                vortekRenderer.setSurfaceDimensions(width, height);
-                sendWindowChange(width, height, 60, "VORTEK");
-                Log.i("VORTEK", "Surface attached to Vulkan (surfaceChanged)");
-            } else {
-                Log.w("VORTEK", "surfaceChanged: surface is null/invalid");
-            }
+                
+                
         }
-    }
 
-    @Override public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
-        LorieView.this.surfaceChanged(null);
-        if (mCallback != null)
-            mCallback.changed(0, 0, 0, 0);
-        // Do NOT null out vortekRenderer here; MainActivity manages lifecycle.
+        @Override public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
+            LorieView.this.surfaceChanged(null);
+            if (vortekRenderer != null) {
+        vortekRenderer.destroy();
     }
-};
+            if (mCallback != null)
+                mCallback.changed(0, 0, 0, 0);
+        }
+    };
 
     public LorieView(Context context) {
         super(context);
